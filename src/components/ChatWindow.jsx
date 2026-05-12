@@ -15,6 +15,36 @@ function ChatWindow({ user, onLogout }) {
     }
   });
   const messagesEndRef = useRef(null);
+  const wsRef = useRef(null);
+  const reconnectTimeoutRef = useRef(null);
+  const [isWsConnected, setIsWsConnected] = useState(false);
+
+  const getCurrentUserId = () => {
+    const sender = currentUser || user || {};
+    return sender.id || sender._id || sender.userId || sender.sender_id || 'guest';
+  };
+
+  const normalizeServerMessage = (msg, fallbackContent) => {
+    const senderName = msg?.sender_name || msg?.senderName || msg?.name || 'Unknown';
+    const senderEmail = msg?.sender_email || msg?.senderEmail || msg?.email || 'unknown@mail.chat';
+    const timestamp = new Date(
+      msg?.created_at || msg?.createdAt || msg?.date || Date.now()
+    ).toLocaleTimeString(['en-BD'], {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    });
+
+    return {
+      id: msg?.id || msg?._id || `msg-${Date.now()}-${Math.random()}`,
+      content: msg?.content || msg?.text || fallbackContent || '',
+      senderName,
+      senderEmail,
+      timestamp,
+      avatar: getInitials(senderName),
+      color: getRandomColor(senderName),
+    };
+  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -72,7 +102,7 @@ function ChatWindow({ user, onLogout }) {
         });
 
         return {
-          id: msg?.id || `msg-${Date.now()}-${index}`,
+          id: msg?.id ? `${msg.id}-${index}` : `msg-${Date.now()}-${index}`,
           content: msg?.content || '',
           senderName,
           senderEmail,
@@ -117,79 +147,125 @@ function ChatWindow({ user, onLogout }) {
     return colors[index];
   };
 
-  const handleSendMessage = async (text) => {
-    const sender = currentUser || user || { name: 'Guest', email: 'guest@rabbit.chat', id: 'guest' };
-    const senderId = sender.id || sender._id || sender.userId || 'guest';
-
-    const outgoingMessage = {
-      id: Date.now(),
-      content: text,
-      senderName: sender.name,
-      senderEmail: sender.email,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      avatar: getInitials(sender.name),
-      color: getRandomColor(sender.name),
-    };
-
-    setMessages((prev) => [...prev, outgoingMessage]);
-
-    try {
-      const response = await fetch('http://127.0.0.1:8000/message/send', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          sender_id: senderId,
-          content: text,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to send message with status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      const savedMessage = data?.message || data?.data || data;
-      if (savedMessage) {
-        const serverMessage = {
-          id: savedMessage.id || savedMessage._id || outgoingMessage.id,
-          content: savedMessage.content || savedMessage.text || text,
-          senderName: savedMessage.senderName || savedMessage.sender_name || sender.name,
-          senderEmail: savedMessage.senderEmail || savedMessage.sender_email || sender.email,
-          timestamp: new Date(savedMessage.created_at || savedMessage.date || savedMessage.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          avatar: getInitials(sender.name),
-          color: getRandomColor(sender.name),
-        };
-
-        setMessages((prev) => prev.map((msg) => (msg.id === outgoingMessage.id ? serverMessage : msg)));
-      }
-    } catch (error) {
-      Swal.fire({
-        title: 'Send Failed',
-        text: error.message,
-        icon: 'error',
-        confirmButtonText: 'OK',
-      });
+  const connectWebSocket = () => {
+    const userId = getCurrentUserId();
+    if (!userId || userId === 'guest') {
+      console.warn('WebSocket skipped because userId is not ready or guest');
+      return;
     }
 
-    // Simulate random user response
-    /*setTimeout(() => {
-      const randomUser = activeUsers.length
-        ? activeUsers[Math.floor(Math.random() * activeUsers.length)]
-        : { name: 'Rabbit Bot', email: 'bot@rabbit.chat' };
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const wsUrl = `${protocol}://127.0.0.1:8000/ws/message/${userId}`;
 
-      const botMessage = {
-        id: Date.now() + 1,
-        content: getBotResponse(text),
-        senderName: randomUser.name,
-        senderEmail: randomUser.email,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        avatar: getInitials(randomUser.name),
-        color: getRandomColor(randomUser.name),
-      };
-      setMessages((prev) => [...prev, botMessage]);
-    }, 800);*/
+    if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
+      wsRef.current.close();
+    }
+
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+
+    try {
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+      setIsWsConnected(false);
+
+      ws.addEventListener('open', () => {
+        console.info('WebSocket connected:', wsUrl);
+        setIsWsConnected(true);
+      });
+
+      ws.addEventListener('message', (event) => {
+        let message;
+
+        try {
+          const data = JSON.parse(event.data);
+          message = normalizeServerMessage(data, data?.content || data?.text || '');
+        } catch {
+          message = {
+            id: `msg-${Date.now()}-${Math.random()}`,
+            content: event.data,
+            senderName: currentUser?.name || user?.name || 'Server',
+            senderEmail: currentUser?.email || user?.email || 'server@rabbit.chat',
+            timestamp: new Date().toLocaleTimeString(['en-BD'], {
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: true,
+            }),
+            avatar: getInitials(currentUser?.name || user?.name || 'Server'),
+            color: getRandomColor(currentUser?.name || user?.name || 'Server'),
+          };
+        }
+
+        setMessages((prev) => [...prev, message]);
+      });
+
+      ws.addEventListener('close', (event) => {
+        console.warn('WebSocket closed:', event.code, event.reason);
+        setIsWsConnected(false);
+        wsRef.current = null;
+        reconnectTimeoutRef.current = window.setTimeout(() => {
+          console.info('Reconnecting WebSocket...');
+          connectWebSocket();
+        }, 2000);
+      });
+
+      ws.addEventListener('error', (event) => {
+        console.error('WebSocket error:', event);
+        setIsWsConnected(false);
+        wsRef.current = null;
+      });
+    } catch (error) {
+      console.error('WebSocket connection failed:', error);
+      setIsWsConnected(false);
+      wsRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    connectWebSocket();
+
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+    };
+  }, [currentUser?.id, currentUser?._id, currentUser?.userId, user?.id, user?._id, user?.userId]);
+
+  const handleSendMessage = async (text) => {
+    if (!text.trim()) return;
+
+    const sender = currentUser || user || { name: 'Guest', email: 'guest@rabbit.chat' };
+    const senderId = getCurrentUserId();
+
+    const outgoingMessage = {
+      content: text,
+      senderName: sender.name || 'Guest',
+      senderEmail: sender.email || 'guest@rabbit.chat',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      avatar: getInitials(sender.name || 'Guest'),
+      color: getRandomColor(sender.name || 'Guest'),
+    };
+
+    setMessages((prev) => [...prev, { id: `local-${Date.now()}`, ...outgoingMessage }]);
+
+    const payload = {
+      sender_id: senderId,
+      content: text,
+    };
+
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      try {
+        wsRef.current.send(text);
+        return;
+      } catch (error) {
+        console.error('WebSocket send error:', error);
+      }
+    }
   };
 
   const getBotResponse = (userMessage) => {
@@ -215,6 +291,7 @@ function ChatWindow({ user, onLogout }) {
           <div>
             <h1 className="text-3xl font-bold text-gray-800">🌐 Public Chat Room</h1>
             <p className="text-sm text-gray-500">{activeUsers.length} members online</p>
+            <p className="text-xs text-gray-400 mt-1">WebSocket: {isWsConnected ? 'connected' : 'disconnected'}</p>
           </div>
           <button
             onClick={onLogout}
