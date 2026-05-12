@@ -1,19 +1,102 @@
 import { useState, useEffect, useRef } from 'react';
 import MessageInput from './MessageInput';
+import Swal from "sweetalert2";
 
 function ChatWindow({ user, onLogout }) {
   const [messages, setMessages] = useState([]);
-  const [activeUsers, setActiveUsers] = useState([
-    { id: '1', name: user.name, email: user.email, status: 'online' },
-    { id: '2', name: 'John Doe', email: 'john@example.com', status: 'online' },
-    { id: '3', name: 'Jane Smith', email: 'jane@example.com', status: 'online' },
-    { id: '4', name: 'Mike Johnson', email: 'mike@example.com', status: 'online' },
-  ]);
+  const [activeUsers, setActiveUsers] = useState([]);
+  const [currentUser, setCurrentUser] = useState(() => {
+    try {
+      const savedUser = localStorage.getItem('user');
+      return savedUser ? JSON.parse(savedUser) : user || null;
+    } catch (error) {
+      console.error('Error parsing user from localStorage:', error);
+      return user || null;
+    }
+  });
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
+
+  const fetchOnlineUsers = async () => {
+    try {
+      const response = await fetch('http://127.0.0.1:8000/users/online');
+      if (!response.ok) {
+        throw new Error(`Failed to fetch online users with status : ${response.status}`);
+      }
+
+      const data = await response.json();
+      const users = Array.isArray(data)
+        ? data
+        : Array.isArray(data.data)
+        ? data.data
+        : data.users || [];
+      setActiveUsers(users);
+    } catch (error) {
+      Swal.fire({
+        title: "Error!",
+        text: error.message,
+        icon: "error",
+        confirmButtonText: "OK"
+      });
+    }
+  };
+
+  const fetchMessages = async () => {
+    try {
+      const response = await fetch('http://127.0.0.1:8000/message/list');
+      if (!response.ok) {
+        throw new Error(`Failed to fetch messages with status : ${response.status}`);
+      }
+
+      const data = await response.json();
+      const messagesData = Array.isArray(data)
+        ? data
+        : Array.isArray(data.data)
+        ? data.data
+        : Array.isArray(data.messages)
+        ? data.messages
+        : [];
+
+      const normalizedMessages = messagesData.map((msg, index) => {
+        const senderName = msg?.sender_name|| 'Unknown';
+        const senderEmail = msg?.sender_email || 'unknown@mail.chat';
+        const timestamp = new Date(
+          msg?.created_at || msg?.date || msg?.createdAt || Date.now()
+        ).toLocaleTimeString(['en-BD'], {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: true
+        });
+
+        return {
+          id: msg?.id || `msg-${Date.now()}-${index}`,
+          content: msg?.content || '',
+          senderName,
+          senderEmail,
+          timestamp,
+          avatar: getInitials(senderName),
+          color: getRandomColor(senderName),
+        };
+      });
+
+      setMessages(normalizedMessages);
+    } catch (error) {
+      Swal.fire({
+        title: "Error!",
+        text: error.message,
+        icon: "error",
+        confirmButtonText: "OK"
+      });
+    }
+  };
+
+  useEffect(() => {
+    fetchOnlineUsers();
+    fetchMessages();
+  }, []);
 
   useEffect(() => {
     scrollToBottom();
@@ -34,25 +117,71 @@ function ChatWindow({ user, onLogout }) {
     return colors[index];
   };
 
-  const handleSendMessage = (text) => {
-    const newMessage = {
+  const handleSendMessage = async (text) => {
+    const sender = currentUser || user || { name: 'Guest', email: 'guest@rabbit.chat', id: 'guest' };
+    const senderId = sender.id || sender._id || sender.userId || 'guest';
+
+    const outgoingMessage = {
       id: Date.now(),
-      text,
-      senderName: user.name,
-      senderEmail: user.email,
+      content: text,
+      senderName: sender.name,
+      senderEmail: sender.email,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      avatar: getInitials(user.name),
-      color: getRandomColor(user.name),
+      avatar: getInitials(sender.name),
+      color: getRandomColor(sender.name),
     };
 
-    setMessages((prev) => [...prev, newMessage]);
+    setMessages((prev) => [...prev, outgoingMessage]);
+
+    try {
+      const response = await fetch('http://127.0.0.1:8000/message/send', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sender_id: senderId,
+          content: text,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to send message with status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const savedMessage = data?.message || data?.data || data;
+      if (savedMessage) {
+        const serverMessage = {
+          id: savedMessage.id || savedMessage._id || outgoingMessage.id,
+          content: savedMessage.content || savedMessage.text || text,
+          senderName: savedMessage.senderName || savedMessage.sender_name || sender.name,
+          senderEmail: savedMessage.senderEmail || savedMessage.sender_email || sender.email,
+          timestamp: new Date(savedMessage.created_at || savedMessage.date || savedMessage.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          avatar: getInitials(sender.name),
+          color: getRandomColor(sender.name),
+        };
+
+        setMessages((prev) => prev.map((msg) => (msg.id === outgoingMessage.id ? serverMessage : msg)));
+      }
+    } catch (error) {
+      Swal.fire({
+        title: 'Send Failed',
+        text: error.message,
+        icon: 'error',
+        confirmButtonText: 'OK',
+      });
+    }
 
     // Simulate random user response
-    setTimeout(() => {
-      const randomUser = activeUsers[Math.floor(Math.random() * activeUsers.length)];
+    /*setTimeout(() => {
+      const randomUser = activeUsers.length
+        ? activeUsers[Math.floor(Math.random() * activeUsers.length)]
+        : { name: 'Rabbit Bot', email: 'bot@rabbit.chat' };
+
       const botMessage = {
         id: Date.now() + 1,
-        text: getBotResponse(text),
+        content: getBotResponse(text),
         senderName: randomUser.name,
         senderEmail: randomUser.email,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -60,7 +189,7 @@ function ChatWindow({ user, onLogout }) {
         color: getRandomColor(randomUser.name),
       };
       setMessages((prev) => [...prev, botMessage]);
-    }, 800);
+    }, 800);*/
   };
 
   const getBotResponse = (userMessage) => {
@@ -128,7 +257,7 @@ function ChatWindow({ user, onLogout }) {
 
                   {/* Message Text */}
                   <div className="mt-1">
-                    <p className="text-gray-700 break-words">{msg.text}</p>
+                    <p className="text-gray-700 break-words">{msg.content}</p>
                   </div>
                 </div>
               </div>
@@ -174,12 +303,12 @@ function ChatWindow({ user, onLogout }) {
         <div className="p-4 border-t border-gray-200 bg-blue-50">
           <p className="text-xs font-semibold text-gray-600 uppercase">You</p>
           <div className="flex items-center gap-3 mt-2">
-            <div className={`w-10 h-10 rounded-full ${getRandomColor(user.name)} text-white flex items-center justify-center font-bold text-sm shadow`}>
-              {getInitials(user.name)}
+            <div className={`w-10 h-10 rounded-full ${getRandomColor(currentUser?.name || user?.name || 'Guest')} text-white flex items-center justify-center font-bold text-sm shadow`}>
+              {getInitials((currentUser || user || { name: 'Guest' }).name)}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-gray-800 truncate">{user.name}</p>
-              <p className="text-xs text-gray-500 truncate">{user.email}</p>
+              <p className="text-sm font-semibold text-gray-800 truncate">{(currentUser || user || { name: 'Guest' }).name}</p>
+              <p className="text-xs text-gray-500 truncate">{(currentUser || user || { email: 'guest@rabbit.chat' }).email}</p>
             </div>
           </div>
         </div>

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import Swal from "sweetalert2";
 
 function UserModal({ onSubmit }) {
   const [mode, setMode] = useState('register');
@@ -64,6 +65,12 @@ function UserModal({ onSubmit }) {
 
     if (authResult?.error) {
       setAuthError(authResult.error);
+      Swal.fire({
+        title: "Error!",
+        text: authResult.error,
+        icon: "error",
+        confirmButtonText: "OK"
+      });
       return;
     }
 
@@ -74,7 +81,14 @@ function UserModal({ onSubmit }) {
         ...prev,
         password: '',
         confirmPassword: '',
+        name: '',
       }));
+      Swal.fire({
+        title: "Success!",
+        text: "Registration succeeded. Please login to continue.",
+        icon: "success",
+        confirmButtonText: "OK"
+      });
     }
   };
 
@@ -121,22 +135,20 @@ function UserModal({ onSubmit }) {
             <button
               type="button"
               onClick={() => switchMode('register')}
-              className={`px-3 py-1 text-sm font-semibold rounded-lg transition ${
-                mode === 'register'
+              className={`px-3 py-1 text-sm font-semibold rounded-lg transition ${mode === 'register'
                   ? 'bg-blue-500 text-white'
                   : 'text-gray-600 hover:bg-gray-200'
-              }`}
+                }`}
             >
               Register
             </button>
             <button
               type="button"
               onClick={() => switchMode('login')}
-              className={`ml-2 px-3 py-1 text-sm font-semibold rounded-lg transition ${
-                mode === 'login'
+              className={`ml-2 px-3 py-1 text-sm font-semibold rounded-lg transition ${mode === 'login'
                   ? 'bg-blue-500 text-white'
                   : 'text-gray-600 hover:bg-gray-200'
-              }`}
+                }`}
             >
               Login
             </button>
@@ -159,9 +171,8 @@ function UserModal({ onSubmit }) {
                 value={formData.name}
                 onChange={handleChange}
                 placeholder="Enter your full name"
-                className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition ${
-                  errors.name ? 'border-red-500' : 'border-gray-300'
-                }`}
+                className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition ${errors.name ? 'border-red-500' : 'border-gray-300'
+                  }`}
               />
               {errors.name && <p className="text-red-500 text-sm mt-1">{errors.name}</p>}
             </div>
@@ -178,9 +189,8 @@ function UserModal({ onSubmit }) {
               value={formData.email}
               onChange={handleChange}
               placeholder="Enter your email"
-              className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition ${
-                errors.email ? 'border-red-500' : 'border-gray-300'
-              }`}
+              className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition ${errors.email ? 'border-red-500' : 'border-gray-300'
+                }`}
             />
             {errors.email && <p className="text-red-500 text-sm mt-1">{errors.email}</p>}
           </div>
@@ -196,9 +206,8 @@ function UserModal({ onSubmit }) {
               value={formData.password}
               onChange={handleChange}
               placeholder="Enter your password"
-              className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition ${
-                errors.password ? 'border-red-500' : 'border-gray-300'
-              }`}
+              className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition ${errors.password ? 'border-red-500' : 'border-gray-300'
+                }`}
             />
             {errors.password && <p className="text-red-500 text-sm mt-1">{errors.password}</p>}
           </div>
@@ -215,9 +224,8 @@ function UserModal({ onSubmit }) {
                 value={formData.confirmPassword}
                 onChange={handleChange}
                 placeholder="Confirm your password"
-                className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition ${
-                  errors.confirmPassword ? 'border-red-500' : 'border-gray-300'
-                }`}
+                className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition ${errors.confirmPassword ? 'border-red-500' : 'border-gray-300'
+                  }`}
               />
               {errors.confirmPassword && (
                 <p className="text-red-500 text-sm mt-1">{errors.confirmPassword}</p>
