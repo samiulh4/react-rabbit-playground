@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import MessageInput from './MessageInput';
 import Swal from "sweetalert2";
 
@@ -18,6 +18,7 @@ function ChatWindow({ user, onLogout }) {
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
   const [isWsConnected, setIsWsConnected] = useState(false);
+  const pingIntervalRef = useRef(null);
 
   const getCurrentUserId = () => {
     const sender = currentUser || user || {};
@@ -61,8 +62,8 @@ function ChatWindow({ user, onLogout }) {
       const users = Array.isArray(data)
         ? data
         : Array.isArray(data.data)
-        ? data.data
-        : data.users || [];
+          ? data.data
+          : data.users || [];
       setActiveUsers(users);
     } catch (error) {
       Swal.fire({
@@ -85,13 +86,13 @@ function ChatWindow({ user, onLogout }) {
       const messagesData = Array.isArray(data)
         ? data
         : Array.isArray(data.data)
-        ? data.data
-        : Array.isArray(data.messages)
-        ? data.messages
-        : [];
+          ? data.data
+          : Array.isArray(data.messages)
+            ? data.messages
+            : [];
 
       const normalizedMessages = messagesData.map((msg, index) => {
-        const senderName = msg?.sender_name|| 'Unknown';
+        const senderName = msg?.sender_name || 'Unknown';
         const senderEmail = msg?.sender_email || 'unknown@mail.chat';
         const timestamp = new Date(
           msg?.created_at || msg?.date || msg?.createdAt || Date.now()
@@ -147,140 +148,166 @@ function ChatWindow({ user, onLogout }) {
     return colors[index];
   };
 
-  const connectWebSocket = () => {
-    const userId = getCurrentUserId();
-    if (!userId || userId === 'guest') {
-      console.warn('WebSocket skipped because userId is not ready or guest');
-      return;
-    }
-
-    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const wsUrl = `${protocol}://127.0.0.1:8000/ws/message/${userId}`;
-
-    if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
-      wsRef.current.close();
-    }
-
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-      reconnectTimeoutRef.current = null;
-    }
-
-    try {
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
-      setIsWsConnected(false);
-
-      ws.addEventListener('open', () => {
-        console.info('WebSocket connected:', wsUrl);
-        setIsWsConnected(true);
-      });
-
-      ws.addEventListener('message', (event) => {
-        let message;
-
-        try {
-          const data = JSON.parse(event.data);
-          message = normalizeServerMessage(data, data?.content || data?.text || '');
-        } catch {
-          message = {
-            id: `msg-${Date.now()}-${Math.random()}`,
-            content: event.data,
-            senderName: currentUser?.name || user?.name || 'Server',
-            senderEmail: currentUser?.email || user?.email || 'server@rabbit.chat',
-            timestamp: new Date().toLocaleTimeString(['en-BD'], {
-              hour: '2-digit',
-              minute: '2-digit',
-              hour12: true,
-            }),
-            avatar: getInitials(currentUser?.name || user?.name || 'Server'),
-            color: getRandomColor(currentUser?.name || user?.name || 'Server'),
-          };
-        }
-
-        setMessages((prev) => [...prev, message]);
-      });
-
-      ws.addEventListener('close', (event) => {
-        console.warn('WebSocket closed:', event.code, event.reason);
-        setIsWsConnected(false);
-        wsRef.current = null;
-        reconnectTimeoutRef.current = window.setTimeout(() => {
-          console.info('Reconnecting WebSocket...');
-          connectWebSocket();
-        }, 2000);
-      });
-
-      ws.addEventListener('error', (event) => {
-        console.error('WebSocket error:', event);
-        setIsWsConnected(false);
-        wsRef.current = null;
-      });
-    } catch (error) {
-      console.error('WebSocket connection failed:', error);
-      setIsWsConnected(false);
-      wsRef.current = null;
-    }
-  };
-
-  useEffect(() => {
-    connectWebSocket();
-
-    return () => {
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
-    };
-  }, [currentUser?.id, currentUser?._id, currentUser?.userId, user?.id, user?._id, user?.userId]);
-
   const handleSendMessage = async (text) => {
     if (!text.trim()) return;
-
-    const sender = currentUser || user || { name: 'Guest', email: 'guest@rabbit.chat' };
-    const senderId = getCurrentUserId();
-
-    const outgoingMessage = {
-      content: text,
-      senderName: sender.name || 'Guest',
-      senderEmail: sender.email || 'guest@rabbit.chat',
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      avatar: getInitials(sender.name || 'Guest'),
-      color: getRandomColor(sender.name || 'Guest'),
-    };
-
-    setMessages((prev) => [...prev, { id: `local-${Date.now()}`, ...outgoingMessage }]);
-
-    const payload = {
-      sender_id: senderId,
-      content: text,
-    };
-
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       try {
         wsRef.current.send(text);
+        console.info('Message sent via WebSocket:', text);
         return;
       } catch (error) {
         console.error('WebSocket send error:', error);
       }
+    } else {
+      console.warn('WebSocket is not open. Message not sent:', text);
     }
   };
 
-  const getBotResponse = (userMessage) => {
-    const responses = [
-      'That sounds interesting! Tell me more!',
-      'I totally agree with you!',
-      'That\'s a great point!',
-      'Thanks for sharing!',
-      'How did that make you feel?',
-      'That\'s awesome! 🎉',
-      'I understand. What happened next?',
-      'Tell me more about that!',
-    ];
-    return responses[Math.floor(Math.random() * responses.length)];
+
+const connectWebSocket = useCallback(() => {
+  const userId = currentUser?.id ?? user?.id ?? null;
+
+  if (!userId) {
+    console.warn('WebSocket skipped: no userId');
+    return;
+  }
+
+  if (wsRef.current) {
+    const state = wsRef.current.readyState;
+    if (state === WebSocket.OPEN || state === WebSocket.CONNECTING) {
+      console.info('Socket already active, skipping.');
+      return;
+    }
+    wsRef.current.onopen    = null;
+    wsRef.current.onmessage = null;
+    wsRef.current.onclose   = null;
+    wsRef.current.onerror   = null;
+    wsRef.current.close();
+    wsRef.current = null;
+  }
+
+  if (reconnectTimeoutRef.current) {
+    clearTimeout(reconnectTimeoutRef.current);
+    reconnectTimeoutRef.current = null;
+  }
+
+  // ── NEW: clear any existing ping interval ──────────────────────────────
+  if (pingIntervalRef.current) {
+    clearInterval(pingIntervalRef.current);
+    pingIntervalRef.current = null;
+  }
+
+  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  const url = `${protocol}://127.0.0.1:8000/ws/message/${userId}`;
+
+  console.info('Opening WebSocket:', url);
+  const socket = new WebSocket(url);
+  wsRef.current = socket;
+
+  socket.onopen = () => {
+    console.info('WebSocket connected:', url);
+    setIsWsConnected(true);
+
+    // ── NEW: send a ping every 25s to prevent server-side keepalive timeout ──
+    // Use 25s — safely under most server 30s timeout windows
+    pingIntervalRef.current = setInterval(() => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        try {
+          //wsRef.current.send(JSON.stringify({ type: 'ping' }));
+          wsRef.current.send('');
+          console.debug('Keepalive ping sent');
+        } catch (err) {
+          console.warn('Ping failed:', err);
+        }
+      }
+    }, 25000);
   };
+
+  /*socket.onmessage = (event) => {
+    console.log('Message from server:', event.data);
+    
+    // ── NEW: ignore pong responses from server ─────────────────────────
+    try {
+      const raw = JSON.parse(event.data);
+      if (raw?.type === 'pong' || raw?.type === 'ping') return;
+
+      const normalized = normalizeServerMessage(raw);
+      setMessages(prev => [...prev, normalized]);
+    } catch {
+      const fallback = normalizeServerMessage(null, event.data);
+      setMessages(prev => [...prev, fallback]);
+    }
+  };*/
+
+  socket.onmessage = (event) => {
+  console.log('Message from server:', event.data);
+
+  // Remove this block ───────────────────────────────────────
+  // if (raw?.type === 'pong' || raw?.type === 'ping') return;
+  // ─────────────────────────────────────────────────────────
+
+  try {
+    const raw = JSON.parse(event.data);
+    const normalized = normalizeServerMessage(raw);
+    setMessages(prev => [...prev, normalized]);
+  } catch {
+    const fallback = normalizeServerMessage(null, event.data);
+    setMessages(prev => [...prev, fallback]);
+  }
+};
+
+  socket.onclose = (event) => {
+    console.log('WebSocket closed:', event.code, event.reason);
+    setIsWsConnected(false);
+    wsRef.current = null;
+
+    // ── NEW: always clear ping on close ───────────────────────────────
+    if (pingIntervalRef.current) {
+      clearInterval(pingIntervalRef.current);
+      pingIntervalRef.current = null;
+    }
+
+    // ── NEW: reconnect on ANY closure (1011 = server error, also retry 1006) ──
+    const noRetry = [1000, 1001]; // normal close or going away
+    if (!noRetry.includes(event.code)) {
+      console.info(`Closed with code ${event.code}, reconnecting in 3s...`);
+      reconnectTimeoutRef.current = setTimeout(connectWebSocket, 3000);
+    }
+  };
+
+  socket.onerror = (error) => {
+    console.error('WebSocket error:', error);
+    setIsWsConnected(false);
+    // onclose always fires after onerror — let it handle reconnect
+  };
+}, [currentUser?.id, user?.id]);
+
+useEffect(() => {
+  connectWebSocket();
+
+  return () => {
+    // Stop ping first
+    if (pingIntervalRef.current) {
+      clearInterval(pingIntervalRef.current);
+      pingIntervalRef.current = null;
+    }
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+    if (wsRef.current) {
+      wsRef.current.onopen    = null;
+      wsRef.current.onmessage = null;
+      wsRef.current.onclose   = null;
+      wsRef.current.onerror   = null;
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+  };
+}, [connectWebSocket]);
+
+
+
 
   return (
     <div className="flex h-screen bg-gray-50">
